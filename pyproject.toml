@@ -1,0 +1,21 @@
+[project]
+name = "java-service-starter"
+version = "2.0.0"
+description = "通用 Java Maven 项目一键编译启动器"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pyyaml>=6.0",
+    "rich>=13.0",
+]
+
+[project.scripts]
+java-start = "java_service_starter.cli:main"
+jss = "java_service_starter.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/java-service-starter"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
