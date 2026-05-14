@@ -9,7 +9,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
-from .models import ProjectConfig, ServiceConfig
+from .models import JavaConfig, MavenConfig, ProjectConfig, ServiceConfig
 from .state import StateManager
 
 console = Console()
@@ -94,6 +94,109 @@ def is_running(port: int) -> bool:
     return find_pid(port) is not None
 
 
+def find_java_processes(port: int) -> list[tuple[int, float]]:
+    """查找匹配 server.port 参数的 Java 进程.
+
+    Returns:
+        [(pid, elapsed_seconds)] — 进程存活时间从 /proc 计算.
+    """
+    import os
+
+    processes: list[tuple[int, float]] = []
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid,etime,args"],
+            capture_output=True,
+            text=True,
+        )
+        for line in result.stdout.splitlines():
+            if "java" in line and f"server.port={port}" in line:
+                parts = line.split(None, 2)
+                if len(parts) >= 2:
+                    pid = int(parts[0])
+                    etime_str = parts[1]
+                    elapsed = _parse_etime(etime_str)
+                    processes.append((pid, elapsed))
+    except Exception:
+        pass
+
+    return processes
+
+
+def _parse_etime(etime_str: str) -> float:
+    """解析 ps etime 格式为秒数.
+
+    格式示例: '1:23' (1分23秒), '1:23:45' (1时23分45秒), '2-3:04:05' (2天3时4分5秒).
+    """
+    try:
+        if "-" in etime_str:
+            # 天-时:分:秒
+            day_part, time_part = etime_str.split("-", 1)
+            days = int(day_part)
+            time_parts = time_part.split(":")
+            if len(time_parts) == 3:
+                h, m, s = int(time_parts[0]), int(time_parts[1]), int(time_parts[2])
+            elif len(time_parts) == 2:
+                h = 0
+                m, s = int(time_parts[0]), int(time_parts[1])
+            else:
+                h, m, s = 0, 0, int(time_parts[0])
+            return days * 86400 + h * 3600 + m * 60 + s
+
+        time_parts = etime_str.split(":")
+        if len(time_parts) == 3:
+            h, m, s = int(time_parts[0]), int(time_parts[1]), int(time_parts[2])
+            return h * 3600 + m * 60 + s
+        elif len(time_parts) == 2:
+            m, s = int(time_parts[0]), int(time_parts[1])
+            return m * 60 + s
+        else:
+            return int(time_parts[0])
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def get_service_status(port: int) -> tuple[str, int | None, float]:
+    """获取服务状态.
+
+    Returns:
+        (status, pid, elapsed_seconds)
+        status: "running" | "starting" | "zombie" | "stopped"
+    """
+    # 端口监听 → 运行中
+    pid = find_pid(port)
+    if pid is not None and pid > 0:
+        return "running", pid, 0.0
+
+    # 查找 Java 进程但端口未监听
+    processes = find_java_processes(port)
+    if processes:
+        # 取最新的进程
+        pid, elapsed = processes[0]
+        if elapsed >= 120:
+            return "zombie", pid, elapsed
+        return "starting", pid, elapsed
+
+    return "stopped", None, 0.0
+
+
+def clear_service(project: ProjectConfig, service: ServiceConfig, state: StateManager | None = None) -> None:
+    """清理服务模块的编译产物（删除整个 target 目录）."""
+    target_dir = project.root / service.module / "target"
+
+    if target_dir.exists():
+        import shutil
+        shutil.rmtree(target_dir)
+        console.print(f"[green]已清理: {target_dir}[/green]")
+    else:
+        console.print(f"[dim]target 目录不存在: {target_dir}[/dim]")
+
+    # 清除编译记录
+    if state:
+        state.clear_compile_record(service.module)
+        console.print("[dim]已清除编译记录[/dim]")
+
+
 def stop_service(port: int, timeout: int = 30) -> bool:
     """停止服务.
 
@@ -144,6 +247,7 @@ def _resolve_maven_classpath(project_root: Path, module: str, maven: MavenConfig
            "-pl", module, "-am",
            "-DincludeScope=runtime",
            f"-Dmdep.outputFile={classpath_file}",
+           "-U",
            "-q"]
     if maven.settings:
         cmd.extend(["-s", maven.settings])
@@ -172,6 +276,41 @@ def _build_mvn_env(java_config: JavaConfig | None = None) -> dict[str, str]:
             env["JAVA_HOME"] = str(java_home)
             env["PATH"] = f"{str(java_home / 'bin')}:{env.get('PATH', '')}"
     return env
+
+
+def _copy_dependencies(
+    project_root: Path, module: str, maven: MavenConfig, java_config: JavaConfig | None = None,
+) -> None:
+    """拷贝依赖 jar 到 target/lib.
+
+    多模块项目中，reactor 内模块的 jar 可能不在本地仓库，
+    需要先 install 依赖模块，再 copy-dependencies。
+    """
+    mvn_bin = maven.resolve_mvn_bin()
+    env = _build_mvn_env(java_config)
+
+    # 先 install 依赖模块到本地仓库（-am 会自动安装上游模块）
+    install_cmd = [str(mvn_bin), "install",
+                   "-pl", module, "-am",
+                   "-DskipTests"]
+    if maven.settings:
+        install_cmd.extend(["-s", maven.settings])
+
+    result = subprocess.run(install_cmd, cwd=project_root, env=env, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"安装依赖模块失败 (exit code: {result.returncode})")
+
+    # 再拷贝依赖 jar
+    copy_cmd = [str(mvn_bin), "dependency:copy-dependencies",
+                "-pl", module,
+                "-DoutputDirectory=target/lib",
+                "-DincludeScope=runtime"]
+    if maven.settings:
+        copy_cmd.extend(["-s", maven.settings])
+
+    result = subprocess.run(copy_cmd, cwd=project_root, env=env, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"拷贝依赖失败 (exit code: {result.returncode})")
 
 
 def build_classpath_dev(
@@ -348,6 +487,8 @@ def _tail_startup_log(
     debug: bool,
     jmx: bool,
     state: StateManager | None,
+    env_jvm_opts: list[str] | None = None,
+    env_sys_vars: dict[str, str] | None = None,
 ) -> None:
     """实时滚动日志，等待服务就绪."""
     from rich.live import Live
@@ -420,12 +561,28 @@ def _tail_startup_log(
         console.print(f"\n[yellow]警告: 服务启动超时 ({timeout}秒)[/yellow]")
 
     console.print(f"访问地址: http://localhost:{service.port}{service.context_path}")
+    _print_env_summary(env, env_jvm_opts, env_sys_vars)
 
     if state:
         state.record_start(
             service.name, env, process.pid, service.port,
             debug=debug, jmx=jmx,
         )
+
+
+def _print_env_summary(
+    env: str,
+    env_jvm_opts: list[str] | None = None,
+    env_sys_vars: dict[str, str] | None = None,
+) -> None:
+    """打印环境配置摘要."""
+    console.print(f"\n[bold]环境配置:[/bold] [green]{env}[/green]")
+    if env_jvm_opts:
+        for opt in env_jvm_opts:
+            console.print(f"  {opt}")
+    if env_sys_vars:
+        for k, v in env_sys_vars.items():
+            console.print(f"  {k}={v}")
 
 
 def start_service(
@@ -465,6 +622,24 @@ def start_service(
         jmx=jmx,
         extra=env_jvm_opts,
     )
+
+    # 检测是否需要编译
+    target_classes = project.root / service.module / "target" / "classes"
+    from .watcher import needs_compile
+    modules_to_compile = needs_compile(project, service.module, state)
+    if not target_classes.exists() or modules_to_compile:
+        if not target_classes.exists():
+            console.print("[yellow]未找到编译产物，自动编译...[/yellow]")
+        else:
+            console.print(f"[yellow]检测到 {len(modules_to_compile)} 个模块需要编译[/yellow]")
+        from .maven import compile_module
+        compile_module(project.root, project.maven, service.module, state, project.java)
+
+    # 确保依赖 jar 可用（target/lib 不存在时拷贝依赖）
+    target_lib = project.root / service.module / "target" / "lib"
+    if not target_lib.exists():
+        console.print("[yellow]拷贝依赖 jar...[/yellow]")
+        _copy_dependencies(project.root, service.module, project.maven, project.java)
 
     # 构建 classpath（使用 Maven 解析的 jar 顺序，避免类冲突）
     classpath = build_classpath_dev(project.root, service.module, project.maven, project.java)
@@ -510,6 +685,7 @@ def start_service(
         _tail_startup_log(
             process, stdout_log, service, env, start_time,
             debug=debug, jmx=jmx, state=state,
+            env_jvm_opts=env_jvm_opts, env_sys_vars=env_sys_vars,
         )
         return
 
@@ -553,6 +729,7 @@ def start_service(
     duration = time.time() - start_time
     console.print(f"\n[bold green]服务启动完成 ({duration:.1f}s)[/bold green]")
     console.print(f"访问地址: http://localhost:{service.port}{service.context_path}")
+    _print_env_summary(env, env_jvm_opts, env_sys_vars)
 
     # 记录启动状态
     if state:

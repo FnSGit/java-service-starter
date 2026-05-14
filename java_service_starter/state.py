@@ -180,3 +180,9 @@ class StateManager:
             if record.service == service and record.port == port:
                 return record.pid
         return None
+
+    def clear_compile_record(self, module: str) -> None:
+        """清除模块的编译记录."""
+        if module in self.state.compile_history:
+            del self.state.compile_history[module]
+            self.save()

@@ -8,11 +8,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .java_runner import find_pid, is_running, start_service, stop_service
-from .maven import auto_compile
+from .java_runner import clear_service, get_service_status, is_running, start_service, stop_service
 from .models import ProjectConfig
 from .state import StateManager
-from .watcher import needs_compile
 
 console = Console()
 
@@ -62,13 +60,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                 return 0
         stop_service(service.port)
 
-    if args.build:
-        console.print(Panel.fit(f"一键编译启动: {args.service}-service", style="bold blue"))
-        modules_to_compile = needs_compile(project, service.module, state)
-        auto_compile(project.root, project.maven, service.module, modules_to_compile, state, project.java)
-    else:
-        console.print(Panel.fit(f"启动服务: {args.service}-service", style="bold blue"))
-
+    console.print(Panel.fit(f"启动服务: {args.service}-service", style="bold blue"))
     start_service(project, service, args.env, debug=args.debug, jmx=args.jmx, state=state, show_log=True)
     return 0
 
@@ -92,10 +84,6 @@ def cmd_restart(args: argparse.Namespace) -> int:
     )
     stop_service(service.port)
 
-    if args.build:
-        modules_to_compile = needs_compile(project, service.module, state)
-        auto_compile(project.root, project.maven, service.module, modules_to_compile, state, project.java)
-
     start_service(project, service, env, debug=debug, jmx=jmx, state=state, show_log=True)
     return 0
 
@@ -109,10 +97,21 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_services(args: argparse.Namespace) -> int:
+def cmd_clear(args: argparse.Namespace) -> int:
+    """处理 clear 命令 — 清理编译产物并重新编译."""
+    config_path = _resolve_config_path(args.config)
+    project, state = _load_project(config_path)
+    service = project.get_service(args.service)
+
+    console.print(Panel.fit(f"清理: {args.service}-service", style="bold yellow"))
+    clear_service(project, service, state)
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
     """列出项目服务及其运行状态."""
     config_path = _resolve_config_path(args.config)
-    project, _ = _load_project(config_path)
+    project, state = _load_project(config_path)
 
     # 可选过滤单个服务
     services = (
@@ -124,17 +123,29 @@ def cmd_services(args: argparse.Namespace) -> int:
     table = Table(title=f"{project.name} - 服务列表", show_lines=True)
     table.add_column("服务", style="bold cyan")
     table.add_column("端口", justify="right")
-    table.add_column("主类", style="dim")
-    table.add_column("模块", style="dim")
+    table.add_column("PID", justify="right")
+    table.add_column("环境", style="bold green")
     table.add_column("状态")
 
     for name, svc in services.items():
-        pid = find_pid(svc.port)
-        if pid:
-            status = f"[green]运行中 (PID {pid})[/green]"
+        status_str, pid, elapsed = get_service_status(svc.port)
+        last_args = state.get_last_start_args(name)
+
+        if status_str == "running":
+            env_str = last_args.get("env", "-") if last_args else "-"
+            status = f"[green]运行中[/green]"
+        elif status_str == "starting":
+            env_str = last_args.get("env", "-") if last_args else "-"
+            status = f"[yellow]启动中 ({elapsed:.0f}s)[/yellow]"
+        elif status_str == "zombie":
+            env_str = last_args.get("env", "-") if last_args else "-"
+            status = f"[red]僵尸进程 ({elapsed:.0f}s)[/red]"
         else:
+            env_str = ""
             status = "[dim]未运行[/dim]"
-        table.add_row(name, str(svc.port), svc.main_class, svc.module, status)
+
+        pid_str = str(pid) if pid else "-"
+        table.add_row(name, str(svc.port), pid_str, env_str, status)
 
     console.print(table)
     return 0
@@ -354,12 +365,13 @@ def main() -> int:
         epilog="""
 示例:
   jss init .                    # 初始化项目配置
-  jss services                  # 查看服务列表和运行状态
+  jss status                    # 查看服务运行状态
+  jss status ps                 # 查看指定服务状态
   jss envs                      # 查看可用环境
-  jss start ps sit5 -b          # 一键编译启动
+  jss start ps sit5             # 启动服务（自动编译）
   jss restart ps                # 快速重启
   jss stop ps                   # 停止服务
-  jss services ps               # 查看指定服务状态
+  jss clear ps                  # 清理编译产物（下次启动自动编译）
   jss history                   # 查看历史
         """,
     )
@@ -373,9 +385,9 @@ def main() -> int:
     init_parser.add_argument("--java-path", help="Java 可执行文件路径")
     init_parser.add_argument("--maven-settings", help="Maven settings.xml 路径")
 
-    # services 命令
-    services_parser = subparsers.add_parser("services", help="查看服务列表和运行状态")
-    services_parser.add_argument("service", nargs="?", help="服务名称 (查看指定服务)")
+    # status 命令
+    status_parser = subparsers.add_parser("status", help="查看服务运行状态")
+    status_parser.add_argument("service", nargs="?", help="服务名称 (查看指定服务)")
 
     # envs 命令
     subparsers.add_parser("envs", help="查看可用环境配置")
@@ -384,7 +396,6 @@ def main() -> int:
     start_parser = subparsers.add_parser("start", help="启动服务")
     start_parser.add_argument("service", help="服务名称")
     start_parser.add_argument("env", nargs="?", default="dev", help="环境 (默认: dev)")
-    start_parser.add_argument("-b", "--build", action="store_true", help="一键编译启动")
     start_parser.add_argument("-d", "--debug", action="store_true", help="启用远程调试")
     start_parser.add_argument("-j", "--jmx", action="store_true", help="启用 JMX")
     start_parser.add_argument("-f", "--force", action="store_true", help="强制重启")
@@ -393,13 +404,16 @@ def main() -> int:
     restart_parser = subparsers.add_parser("restart", help="快速重启")
     restart_parser.add_argument("service", help="服务名称")
     restart_parser.add_argument("env", nargs="?", help="环境")
-    restart_parser.add_argument("-b", "--build", action="store_true", help="编译后重启")
     restart_parser.add_argument("-d", "--debug", action="store_true", help="启用远程调试")
     restart_parser.add_argument("-j", "--jmx", action="store_true", help="启用 JMX")
 
     # stop 命令
     stop_parser = subparsers.add_parser("stop", help="停止服务")
     stop_parser.add_argument("service", help="服务名称")
+
+    # clear 命令
+    clear_parser = subparsers.add_parser("clear", help="清理编译产物")
+    clear_parser.add_argument("service", help="服务名称")
 
     # history 命令
     subparsers.add_parser("history", help="查看编译/启动历史")
@@ -414,8 +428,8 @@ def main() -> int:
         match args.command:
             case "init":
                 return cmd_init(args)
-            case "services":
-                return cmd_services(args)
+            case "status":
+                return cmd_status(args)
             case "envs":
                 return cmd_envs(args)
             case "start":
@@ -424,6 +438,8 @@ def main() -> int:
                 return cmd_restart(args)
             case "stop":
                 return cmd_stop(args)
+            case "clear":
+                return cmd_clear(args)
             case "history":
                 return cmd_history(args)
             case _:
