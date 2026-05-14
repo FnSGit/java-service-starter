@@ -36,6 +36,7 @@ def compile_module(
     module: str,
     state: StateManager | None = None,
     java_config: JavaConfig | None = None,
+    goal: str = "compile",
 ) -> None:
     """执行 Maven 编译，实时显示输出.
 
@@ -45,12 +46,13 @@ def compile_module(
         module: 目标模块路径.
         state: 状态管理器.
         java_config: Java 配置.
+        goal: Maven 目标，默认 compile。clear 后重建用 package.
 
     Raises:
         RuntimeError: 编译失败.
     """
     mvn_bin = maven.resolve_mvn_bin()
-    args = maven.build_compile_args(module)
+    args = maven.build_compile_args(module, goal=goal)
     cmd = [str(mvn_bin)] + args
     env = _build_env(java_config)
 

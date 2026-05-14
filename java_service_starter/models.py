@@ -151,9 +151,14 @@ class MavenConfig:
             "未找到 Maven 可执行文件。请配置 maven.path 或确保 mvn 在 PATH 中。"
         )
 
-    def build_compile_args(self, module: str) -> list[str]:
-        """构建 Maven 编译参数."""
-        args = ["compile", "-pl", module, "-am"]
+    def build_compile_args(self, module: str, goal: str = "compile") -> list[str]:
+        """构建 Maven 编译参数.
+
+        Args:
+            module: 目标模块路径.
+            goal: Maven 目标，默认 compile。clear 后重建用 package.
+        """
+        args = [goal, "-pl", module, "-am"]
         if self.skip_tests:
             args.append("-DskipTests")
         if self.settings:
