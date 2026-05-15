@@ -158,7 +158,7 @@ class MavenConfig:
             module: 目标模块路径.
             goal: Maven 目标，默认 compile。clear 后重建用 package.
         """
-        args = [goal, "-pl", module, "-am"]
+        args = [goal, "-pl", module, "-am", "-T", "1C"]
         if self.skip_tests:
             args.append("-DskipTests")
         if self.settings:

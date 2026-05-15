@@ -174,6 +174,36 @@ def cmd_envs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_logs(args: argparse.Namespace) -> int:
+    """查看服务日志."""
+    config_path = _resolve_config_path(args.config)
+    project, state = _load_project(config_path)
+    service = project.get_service(args.service)
+
+    # 从上次启动参数获取环境名
+    last_args = state.get_last_start_args(args.service)
+    env = args.env or (last_args["env"] if last_args else "dev")
+
+    log_file = project.root / "logs" / f"{service.name}-{env}" / "stdout.log"
+    if not log_file.exists():
+        console.print(f"[red]日志文件不存在: {log_file}[/red]")
+        return 1
+
+    lines = args.lines
+    with open(log_file, encoding="utf-8", errors="replace") as f:
+        all_lines = f.readlines()
+
+    tail_lines = all_lines[-lines:]
+    console.print(Panel.fit(
+        f"[bold]{service.name}-{env}[/bold] 日志 (最近 {len(tail_lines)} 行)",
+        style="blue",
+    ))
+    for line in tail_lines:
+        console.print(line.rstrip())
+
+    return 0
+
+
 def cmd_history(args: argparse.Namespace) -> int:
     """处理 history 命令."""
     config_path = _resolve_config_path(args.config)
@@ -372,6 +402,8 @@ def main() -> int:
   jss restart ps                # 快速重启
   jss stop ps                   # 停止服务
   jss clear ps                  # 清理编译产物（下次启动自动编译）
+  jss logs ps                   # 查看服务日志（最近500行）
+  jss logs ps sit5 -n 100       # 查看指定环境最近100行
   jss history                   # 查看历史
         """,
     )
@@ -415,6 +447,12 @@ def main() -> int:
     clear_parser = subparsers.add_parser("clear", help="清理编译产物")
     clear_parser.add_argument("service", help="服务名称")
 
+    # logs 命令
+    logs_parser = subparsers.add_parser("logs", help="查看服务日志")
+    logs_parser.add_argument("service", help="服务名称")
+    logs_parser.add_argument("env", nargs="?", help="环境 (默认: 上次启动的环境)")
+    logs_parser.add_argument("-n", "--lines", type=int, default=500, help="显示行数 (默认: 500)")
+
     # history 命令
     subparsers.add_parser("history", help="查看编译/启动历史")
 
@@ -440,6 +478,8 @@ def main() -> int:
                 return cmd_stop(args)
             case "clear":
                 return cmd_clear(args)
+            case "logs":
+                return cmd_logs(args)
             case "history":
                 return cmd_history(args)
             case _:

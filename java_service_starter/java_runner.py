@@ -292,6 +292,7 @@ def _copy_dependencies(
     # 先 install 依赖模块到本地仓库（-am 会自动安装上游模块）
     install_cmd = [str(mvn_bin), "install",
                    "-pl", module, "-am",
+                   "-T", "1C",
                    "-DskipTests"]
     if maven.settings:
         install_cmd.extend(["-s", maven.settings])

@@ -13,9 +13,10 @@
 1. **扫描识别** -- `scanner` 模块自动扫描 Maven 项目结构，识别服务模块、主类、端口
 2. **配置加载** -- `models` 模块从 YAML 配置文件加载项目/服务/JVM/Maven 配置
 3. **变更检测** -- `watcher` 模块检测源码变更，决定哪些模块需要编译
-4. **编译执行** -- `maven` 模块调用 Maven 执行增量编译
-5. **进程管理** -- `java_runner` 模块构建 classpath、组装 JVM 参数、启动/停止 Java 进程
-6. **状态持久化** -- `state` 模块记录编译历史与启动参数，支持智能重启
+4. **编译执行** -- `maven` 模块调用 Maven 执行增量编译（`-T 1C` 并行构建）
+5. **依赖拷贝** -- `java_runner` 模块在 target/lib 缺失时自动 install + copy-dependencies
+6. **进程管理** -- `java_runner` 模块构建 classpath、组装 JVM 参数、启动/停止 Java 进程
+7. **状态持久化** -- `state` 模块记录编译历史与启动参数，支持智能重启
 
 ### 模块结构图
 
@@ -50,17 +51,17 @@ graph TD
 
 | 路径 | 职责 | 关键类/函数 |
 |------|------|-------------|
-| `java_service_starter/cli.py` | CLI 入口，命令分发 | `main()`, `cmd_start()`, `cmd_stop()`, `cmd_restart()`, `cmd_init()`, `cmd_status()`, `cmd_envs()`, `cmd_history()`, `cmd_clear()` |
+| `java_service_starter/cli.py` | CLI 入口，命令分发 | `main()`, `cmd_start()`, `cmd_stop()`, `cmd_restart()`, `cmd_init()`, `cmd_status()`, `cmd_envs()`, `cmd_history()`, `cmd_clear()`, `cmd_logs()` |
 | `java_service_starter/models.py` | 数据模型定义 | `ServiceConfig`, `JavaConfig`, `JvmConfig`, `MavenConfig`, `ProjectConfig` |
 | `java_service_starter/scanner.py` | Maven 项目自动扫描 | `ProjectScanner`, `ScannedService`, `scan_project()` |
 | `java_service_starter/maven.py` | Maven 编译执行 | `compile_module()`, `auto_compile()` |
 | `java_service_starter/watcher.py` | 源码变更检测 | `needs_compile()` |
-| `java_service_starter/java_runner.py` | Java 进程生命周期管理 | `start_service()`, `stop_service()`, `is_running()`, `find_pid()`, `get_service_status()`, `clear_service()`, `load_env()`, `build_classpath_dev()` |
+| `java_service_starter/java_runner.py` | Java 进程生命周期管理 | `start_service()`, `stop_service()`, `is_running()`, `find_pid()`, `get_service_status()`, `clear_service()`, `_copy_dependencies()`, `load_env()`, `build_classpath_dev()` |
 | `java_service_starter/state.py` | 编译/启动状态持久化 | `StateManager`, `ProjectState`, `CompileRecord`, `StartRecord` |
 
 ## 部署
 
-每次改完代码后：开发时用 editable 模式调试，稳定后执行 `make install` 使全局生效。
+每次改完代码后执行 `make install` 使全局生效（底层 `uv tool install --force --reinstall`）。
 
 ## 运行与开发
 
@@ -84,13 +85,22 @@ uv sync
 | 命令 | 用途 |
 |------|------|
 | `jss init [目录]` | 初始化项目配置，扫描 Maven 结构生成 config.yaml |
-| `jss status [服务名]` | 查看服务列表和运行状态 |
+| `jss status [服务名]` | 查看服务运行状态（PID、环境、僵尸检测） |
 | `jss envs` | 查看可用环境配置 |
-| `jss start <服务> <环境> -b` | 一键编译启动（-d 调试，-j JMX，-f 强制重启） |
+| `jss start <服务> <环境>` | 启动服务（自动编译，-d 调试，-j JMX，-f 强制重启） |
 | `jss restart <服务> [环境]` | 快速重启（复用上次参数） |
 | `jss stop <服务>` | 停止服务（SIGTERM，超时后 SIGKILL） |
 | `jss clear <服务>` | 清理编译产物（删除 target 目录） |
+| `jss logs <服务> [环境]` | 查看服务日志（-n 指定行数，默认 500） |
 | `jss history` | 查看编译/启动历史 |
+
+### 自动编译机制
+
+启动时自动检测编译需求，无需手动指定：
+- `target/classes` 不存在 → 自动 `compile`
+- 源文件有修改但 target 还在 → 自动 `compile`
+- `target/lib` 不存在 → 自动 `install` + `copy-dependencies` 重建依赖 jar
+- 编译使用 `-T 1C` 并行构建加速
 
 ### 配置文件
 
@@ -127,11 +137,13 @@ uv sync
 - 新增配置项时，同步更新 `models.py` 的 dataclass 和 `ProjectConfig.from_yaml()` 方法
 - 环境变量分类规则在 `java_runner.py` 的 `_parse_env_file()` 中，修改前注意 JVM 参数前缀列表
 - 变更检测有两层策略：优先 `state.is_compile_fresh()`（持久化状态），回退到文件系统时间戳比较
-- classpath 构建优先使用 Maven 解析的顺序（`_resolve_maven_classpath`），回退到字母排序
-- 部署：开发时 editable 模式调试，稳定后 `make install` 全局生效
+- classpath 构建优先使用 `target/lib`（jar 拷贝），回退到 `_resolve_maven_classpath`（Maven 本地仓库路径）
+- 多模块项目中 `dependency:build-classpath` 可能失败（reactor 内模块 jar 不在本地仓库），需先 `install`
+- 部署：`make install` 全局生效
 
 ## 变更记录 (Changelog)
 
 | 时间 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-15 09:30 | 功能增强 | 新增 `logs` 命令；自动编译机制（去掉 `-b`）；`status` 替代 `services`；`-T 1C` 并行构建；`_copy_dependencies` 依赖拷贝 |
 | 2026-05-14 21:45 | 初始创建 | 首次生成项目 AI 上下文文档，覆盖全部 7 个源文件 |
