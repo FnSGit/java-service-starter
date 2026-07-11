@@ -240,11 +240,14 @@ def stop_service(port: int, timeout: int = 30) -> bool:
 
 def _resolve_maven_classpath(project_root: Path, module: str, maven: MavenConfig, java_config: JavaConfig | None = None) -> str | None:
     """通过 mvn dependency:build-classpath 获取 Maven 解析的 classpath 顺序."""
+    from .maven import resolve_mvn_invocation
+
     mvn_bin = maven.resolve_mvn_bin()
     classpath_file = project_root / module / "target" / ".maven-classpath.txt"
+    cwd, pl_args = resolve_mvn_invocation(project_root, module)
 
     cmd = [str(mvn_bin), "dependency:build-classpath",
-           "-pl", module, "-am",
+           *pl_args,
            "-DincludeScope=runtime",
            f"-Dmdep.outputFile={classpath_file}",
            "-U",
@@ -255,7 +258,7 @@ def _resolve_maven_classpath(project_root: Path, module: str, maven: MavenConfig
     env = _build_mvn_env(java_config)
 
     try:
-        result = subprocess.run(cmd, cwd=project_root, env=env, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
         if result.returncode == 0 and classpath_file.exists():
             cp = classpath_file.read_text(encoding="utf-8").strip()
             if cp:
@@ -285,31 +288,36 @@ def _copy_dependencies(
 
     多模块项目中，reactor 内模块的 jar 可能不在本地仓库，
     需要先 install 依赖模块，再 copy-dependencies。
+    单项目/并列项目无 reactor，直接进入模块目录执行。
     """
+    from .maven import resolve_mvn_invocation
+
     mvn_bin = maven.resolve_mvn_bin()
     env = _build_mvn_env(java_config)
+    cwd, pl_args = resolve_mvn_invocation(project_root, module)
 
-    # 先 install 依赖模块到本地仓库（-am 会自动安装上游模块）
+    # 先 install 依赖模块到本地仓库（reactor 模式下 -am 会自动安装上游模块）
     install_cmd = [str(mvn_bin), "install",
-                   "-pl", module, "-am",
+                   *pl_args,
                    "-T", "1C",
                    "-DskipTests"]
     if maven.settings:
         install_cmd.extend(["-s", maven.settings])
 
-    result = subprocess.run(install_cmd, cwd=project_root, env=env, text=True)
+    result = subprocess.run(install_cmd, cwd=cwd, env=env, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"安装依赖模块失败 (exit code: {result.returncode})")
 
-    # 再拷贝依赖 jar
+    # 再拷贝依赖 jar（copy-dependencies 不支持 -am，这里复用 -pl 但去掉 -am）
+    copy_pl_args = [a for a in pl_args if a != "-am"]
     copy_cmd = [str(mvn_bin), "dependency:copy-dependencies",
-                "-pl", module,
+                *copy_pl_args,
                 "-DoutputDirectory=target/lib",
                 "-DincludeScope=runtime"]
     if maven.settings:
         copy_cmd.extend(["-s", maven.settings])
 
-    result = subprocess.run(copy_cmd, cwd=project_root, env=env, text=True)
+    result = subprocess.run(copy_cmd, cwd=cwd, env=env, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"拷贝依赖失败 (exit code: {result.returncode})")
 

@@ -152,13 +152,18 @@ class MavenConfig:
         )
 
     def build_compile_args(self, module: str, goal: str = "compile") -> list[str]:
-        """构建 Maven 编译参数.
+        """构建 Maven 编译参数（不含 reactor / cwd 决策）.
 
         Args:
-            module: 目标模块路径.
+            module: 目标模块路径（保留参数仅作日志/兼容用途，实际 reactor 模式由调用方注入）.
             goal: Maven 目标，默认 compile。clear 后重建用 package.
+
+        Note:
+            reactor 参数（-pl/-am）和 cwd 由 maven.resolve_mvn_invocation() 决定，
+            本方法只返回与 reactor 无关的通用参数。
         """
-        args = [goal, "-pl", module, "-am", "-T", "1C"]
+        del module  # 该方法不再消费 module 参数；保留签名以兼容调用方
+        args = [goal, "-T", "1C"]
         if self.skip_tests:
             args.append("-DskipTests")
         if self.settings:

@@ -333,10 +333,12 @@ def cmd_init(args: argparse.Namespace) -> int:
         console.print(f"[red]目录不存在: {project_root}[/red]")
         return 1
 
-    if not (project_root / "pom.xml").exists():
-        console.print(f"[red]未找到 pom.xml: {project_root}[/red]")
-        console.print("[dim]请在 Maven 项目根目录下执行[/dim]")
-        return 1
+    # 不再强制要求根目录有 pom.xml
+    # 支持三种结构：
+    # 1. 单独立项目（根目录有 pom + src/main/java）
+    # 2. Maven 多模块项目（根有聚合 pom，子模块有各自 pom）
+    # 3. 多独立项目并列（根目录无 pom，子目录各为独立项目）
+    # 由 ProjectScanner 统一识别，扫描结果为空时再报错
 
     console.print(Panel.fit(f"初始化项目: {project_root.name}", style="bold blue"))
 
@@ -347,6 +349,10 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     if not services:
         console.print("[red]未找到任何服务模块[/red]")
+        console.print("[dim]需要满足以下任一结构：[/dim]")
+        console.print("[dim]  1. 单项目：当前目录有 pom.xml + src/main/java + Spring Boot 主类[/dim]")
+        console.print("[dim]  2. 多模块：当前目录有聚合 pom.xml，子模块有各自 pom.xml[/dim]")
+        console.print("[dim]  3. 并列项目：子目录各为独立 Maven 项目[/dim]")
         return 1
 
     console.print(f"\n[green]找到 {len(services)} 个服务模块:[/green]")

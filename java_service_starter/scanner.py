@@ -72,17 +72,17 @@ class ProjectScanner:
         module_dir = pom_path.parent
         rel_path = module_dir.relative_to(self.root).as_posix()
 
-        # 跳过根目录
-        if rel_path == ".":
-            return
-
         # 检查是否有 src/main/java（Java 模块的特征）
+        # 注意：根目录本身可能就是单独立项目，不再跳过 rel_path == "."
         src_java = module_dir / "src" / "main" / "java"
         if not src_java.exists():
             return
 
+        # 根目录作为服务时，使用项目目录名作为推断基准
+        infer_name = self.root.name if rel_path == "." else module_dir.name
+
         service = ScannedService(
-            name=self._infer_service_name(module_dir.name),
+            name=self._infer_service_name(infer_name),
             module_path=rel_path,
         )
 
@@ -255,30 +255,17 @@ class ProjectScanner:
     def _infer_service_name(self, module_name: str) -> str:
         """从模块名推断简短服务名.
 
-        策略：去掉常见前缀和后缀，保留核心标识。
+        策略：先剥离后缀，再按需剥离前缀，避免名称冲突。
         例如:
-          uccb-epm-ps-service → ps
-          uccb-epm-fw-ui → fw
+          uccb-epm-ps-service → ps（剥后缀 -service → uccb-epm-ps，剥前缀 uccb-epm- → ps）
+          core-banking-service → core-banking（剥后缀 -service → core-banking，仅2段不剥前缀）
+          notification-service → notification（剥后缀 -service → notification，仅1段不剥前缀）
           uccb-epm-application-batch → batch
-          my-company-order-service → order
           user-service → user
         """
         name = module_name
 
-        # 去掉常见前缀（贪心匹配最长的）
-        prefixes = [
-            r"^[a-z]+-[a-z]+-application-",  # uccb-epm-application-
-            r"^[a-z]+-[a-z]+-",              # uccb-epm-
-            r"^[a-z]+-application-",          # myapp-application-
-            r"^[a-z]+-",                      # uccb-
-        ]
-        for pat in prefixes:
-            new_name = re.sub(pat, "", name)
-            if new_name != name:
-                name = new_name
-                break
-
-        # 去掉常见后缀
+        # 第一步：剥离常见后缀
         suffixes = [
             r"-service$",
             r"-application$",
@@ -294,6 +281,20 @@ class ProjectScanner:
             if new_name != name:
                 name = new_name
                 break
+
+        # 第二步：仅当剥离后段数仍≥3时（暗示存在企业前缀），剥离前缀
+        # 这避免了 "core-banking" 被错误剥离为 "banking"
+        if name.count("-") >= 2:
+            prefixes = [
+                r"^[a-z]+-[a-z]+-application-",  # uccb-epm-application-
+                r"^[a-z]+-[a-z]+-",              # uccb-epm-
+                r"^[a-z]+-application-",          # myapp-application-
+            ]
+            for pat in prefixes:
+                new_name = re.sub(pat, "", name)
+                if new_name != name:
+                    name = new_name
+                    break
 
         # 如果简化后为空或太短，回退到原模块名
         if len(name) < 2:

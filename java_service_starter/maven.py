@@ -30,6 +30,24 @@ def _build_env(java_config: JavaConfig | None = None) -> dict[str, str]:
     return env
 
 
+def resolve_mvn_invocation(project_root: Path, module: str) -> tuple[Path, list[str]]:
+    """根据项目结构决定 Maven 调用的 cwd 与 reactor 参数.
+
+    返回 (cwd, pl_args)：
+    - 多模块项目（根目录有 pom.xml 且 module 不为 "."）：cwd=root, pl_args=["-pl", module, "-am"]
+    - 单项目或并列项目（根无聚合 pom，或 module="."）：cwd=root/module, pl_args=[]
+
+    判定依据是根目录是否存在 pom.xml，避免对 reactor 内模块以外的项目使用 -pl 失败。
+    """
+    if module in (".", ""):
+        return project_root, []
+
+    if (project_root / "pom.xml").exists():
+        return project_root, ["-pl", module, "-am"]
+
+    return project_root / module, []
+
+
 def compile_module(
     project_root: Path,
     maven: MavenConfig,
@@ -52,12 +70,14 @@ def compile_module(
         RuntimeError: 编译失败.
     """
     mvn_bin = maven.resolve_mvn_bin()
+    cwd, pl_args = resolve_mvn_invocation(project_root, module)
     args = maven.build_compile_args(module, goal=goal)
-    cmd = [str(mvn_bin)] + args
+    # reactor 参数置于 goal 之后，settings/skipTests 之前
+    cmd = [str(mvn_bin), args[0], *pl_args, *args[1:]]
     env = _build_env(java_config)
 
     console.print(Panel.fit(
-        f"[bold]编译命令[/bold]\n{' '.join(cmd)}",
+        f"[bold]编译命令[/bold]\n{' '.join(cmd)}\n[dim]cwd: {cwd}[/dim]",
         style="blue",
     ))
 
@@ -66,7 +86,7 @@ def compile_module(
     # 实时输出 Maven 编译日志
     result = subprocess.run(
         cmd,
-        cwd=project_root,
+        cwd=cwd,
         env=env,
         text=True,
     )
