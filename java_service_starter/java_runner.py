@@ -594,6 +594,57 @@ def _print_env_summary(
             console.print(f"  {k}={v}")
 
 
+def build_service(
+    project: ProjectConfig,
+    service: ServiceConfig,
+    *,
+    force: bool = False,
+    skip_deps: bool = False,
+    state: StateManager | None = None,
+) -> None:
+    """编译服务模块并拷贝依赖（不启动服务）.
+
+    用于仅需编译产物而不启动服务的场景（测试验证、TDD 等）。
+
+    Args:
+        project: 项目配置.
+        service: 服务配置.
+        force: 强制重新编译（忽略增量检测）.
+        skip_deps: 跳过依赖拷贝，仅编译源码（TDD 快速迭代）.
+        state: 状态管理器，用于记录编译结果.
+    """
+    target_classes = project.root / service.module / "target" / "classes"
+
+    if force:
+        console.print("[yellow]强制重新编译...[/yellow]")
+        from .maven import compile_module
+        compile_module(project.root, project.maven, service.module, state, project.java)
+    else:
+        from .watcher import needs_compile
+        modules_to_compile = needs_compile(project, service.module, state)
+        if not target_classes.exists() or modules_to_compile:
+            if not target_classes.exists():
+                console.print("[yellow]未找到编译产物，自动编译...[/yellow]")
+            else:
+                console.print(f"[yellow]检测到 {len(modules_to_compile)} 个模块需要编译[/yellow]")
+            from .maven import compile_module
+            compile_module(project.root, project.maven, service.module, state, project.java)
+        else:
+            console.print("[green]所有模块均为最新，跳过编译[/green]")
+
+    if skip_deps:
+        console.print("[dim]跳过依赖拷贝 (--skip-deps)[/dim]")
+        return
+
+    # 确保依赖 jar 可用（target/lib 不存在时拷贝依赖）
+    target_lib = project.root / service.module / "target" / "lib"
+    if not target_lib.exists():
+        console.print("[yellow]拷贝依赖 jar...[/yellow]")
+        _copy_dependencies(project.root, service.module, project.maven, project.java)
+    else:
+        console.print("[green]依赖 jar 已存在，跳过拷贝[/green]")
+
+
 def start_service(
     project: ProjectConfig,
     service: ServiceConfig,
@@ -632,23 +683,8 @@ def start_service(
         extra=env_jvm_opts,
     )
 
-    # 检测是否需要编译
-    target_classes = project.root / service.module / "target" / "classes"
-    from .watcher import needs_compile
-    modules_to_compile = needs_compile(project, service.module, state)
-    if not target_classes.exists() or modules_to_compile:
-        if not target_classes.exists():
-            console.print("[yellow]未找到编译产物，自动编译...[/yellow]")
-        else:
-            console.print(f"[yellow]检测到 {len(modules_to_compile)} 个模块需要编译[/yellow]")
-        from .maven import compile_module
-        compile_module(project.root, project.maven, service.module, state, project.java)
-
-    # 确保依赖 jar 可用（target/lib 不存在时拷贝依赖）
-    target_lib = project.root / service.module / "target" / "lib"
-    if not target_lib.exists():
-        console.print("[yellow]拷贝依赖 jar...[/yellow]")
-        _copy_dependencies(project.root, service.module, project.maven, project.java)
+    # 编译 + 拷贝依赖
+    build_service(project, service, state=state)
 
     # 构建 classpath（使用 Maven 解析的 jar 顺序，避免类冲突）
     classpath = build_classpath_dev(project.root, service.module, project.maven, project.java)
@@ -746,5 +782,3 @@ def start_service(
             service.name, env, process.pid, service.port,
             debug=debug, jmx=jmx,
         )
-
-

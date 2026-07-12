@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .java_runner import clear_service, get_service_status, is_running, start_service, stop_service
+from .java_runner import build_service, clear_service, get_service_status, is_running, start_service, stop_service
 from .models import ProjectConfig
 from .state import StateManager
 
@@ -105,6 +105,17 @@ def cmd_clear(args: argparse.Namespace) -> int:
 
     console.print(Panel.fit(f"清理: {args.service}-service", style="bold yellow"))
     clear_service(project, service, state)
+    return 0
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    """处理 build 命令 - 仅编译不启动."""
+    config_path = _resolve_config_path(args.config)
+    project, state = _load_project(config_path)
+    service = project.get_service(args.service)
+
+    console.print(Panel.fit(f"编译: {args.service}-service", style="bold blue"))
+    build_service(project, service, force=args.force, skip_deps=args.skip_deps, state=state)
     return 0
 
 
@@ -405,6 +416,9 @@ def main() -> int:
   jss status ps                 # 查看指定服务状态
   jss envs                      # 查看可用环境
   jss start ps sit5             # 启动服务（自动编译）
+  jss build ps                  # 仅编译不启动（测试/TDD）
+  jss build ps --force          # 强制重新编译
+  jss build ps --skip-deps      # 仅编译不拷贝依赖（快速迭代）
   jss restart ps                # 快速重启
   jss stop ps                   # 停止服务
   jss clear ps                  # 清理编译产物（下次启动自动编译）
@@ -453,6 +467,12 @@ def main() -> int:
     clear_parser = subparsers.add_parser("clear", help="清理编译产物")
     clear_parser.add_argument("service", help="服务名称")
 
+    # build 命令
+    build_parser = subparsers.add_parser("build", help="仅编译不启动（测试/TDD）")
+    build_parser.add_argument("service", help="服务名称")
+    build_parser.add_argument("-f", "--force", action="store_true", help="强制重新编译")
+    build_parser.add_argument("--skip-deps", action="store_true", help="跳过依赖拷贝（快速编译）")
+
     # logs 命令
     logs_parser = subparsers.add_parser("logs", help="查看服务日志")
     logs_parser.add_argument("service", help="服务名称")
@@ -478,6 +498,8 @@ def main() -> int:
                 return cmd_envs(args)
             case "start":
                 return cmd_start(args)
+            case "build":
+                return cmd_build(args)
             case "restart":
                 return cmd_restart(args)
             case "stop":
