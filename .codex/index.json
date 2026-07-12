@@ -1,0 +1,122 @@
+{
+  "timestamp": "2026-07-12T14:58:00+08:00",
+  "project": {
+    "name": "java-service-starter",
+    "version": "2.0.0",
+    "language": "Python",
+    "python_version": ">=3.14",
+    "build_system": "hatchling",
+    "package_manager": "uv"
+  },
+  "root_context": {
+    "agents_md": "AGENTS.md",
+    "context_file": "AGENTS.md",
+    "description": "通用 Java Maven 多模块微服务项目一键编译启动器"
+  },
+  "modules": [
+    {
+      "name": "java_service_starter",
+      "path": "java_service_starter",
+      "language": "Python",
+      "description": "核心包：CLI 入口、数据模型、项目扫描、Maven 编译、变更检测、进程管理、状态持久化",
+      "entry_points": [
+        "java_service_starter/cli.py:main()",
+        "java_service_starter/__main__.py"
+      ],
+      "context_file": "java_service_starter/AGENTS.md",
+      "interfaces": {
+        "cli_commands": [
+          "init",
+          "status",
+          "envs",
+          "start",
+          "restart",
+          "stop",
+          "clear",
+          "build",
+          "logs",
+          "history"
+        ],
+        "python_api": [
+          "start_service()",
+          "build_service()",
+          "stop_service()",
+          "is_running()",
+          "find_pid()",
+          "get_service_status()",
+          "clear_service()",
+          "load_env()",
+          "build_classpath_dev()",
+          "compile_module()",
+          "needs_compile()"
+        ]
+      },
+      "key_files": [
+        "__init__.py",
+        "__main__.py",
+        "cli.py",
+        "models.py",
+        "scanner.py",
+        "maven.py",
+        "watcher.py",
+        "java_runner.py",
+        "state.py"
+      ],
+      "tests": {
+        "path": "tests/",
+        "status": "empty",
+        "framework": "pytest (recommended)"
+      },
+      "dependencies": {
+        "runtime": ["pyyaml>=6.0", "rich>=13.0"],
+        "build": ["hatchling"]
+      },
+      "gaps": [
+        "No test files in tests/ directory",
+        "docs/user-guide.md references outdated commands (jss services, -b flag)"
+      ]
+    }
+  ],
+  "docs": [
+    "README.md",
+    "docs/user-guide.md",
+    "AGENTS.md",
+    "java_service_starter/AGENTS.md",
+    "CLAUDE.md (legacy, for Claude Code)",
+    "java_service_starter/CLAUDE.md (legacy, for Claude Code)"
+  ],
+  "scan_coverage": {
+    "total_source_files": 9,
+    "scanned_files": 9,
+    "coverage_percent": 100,
+    "total_files_estimated": 16,
+    "total_scanned": 16,
+    "truncated": false
+  },
+  "ignore_stats": {
+    "rules_source": ".gitignore",
+    "ignored_patterns": [
+      "__pycache__/",
+      "*.pyc",
+      "*.pyo",
+      "*.egg-info/",
+      "dist/",
+      "build/",
+      ".venv/",
+      "*.so",
+      ".python-version",
+      ".session-memory/",
+      ".claude/"
+    ]
+  },
+  "gap_list": [
+    {
+      "module": "java_service_starter",
+      "gaps": [
+        "No tests: tests/ directory is empty",
+        "docs/user-guide.md is outdated (references jss services and -b flag that no longer exist)",
+        "README.md is outdated (references jss services and -b flag)"
+      ]
+    }
+  ]
+}

@@ -49,21 +49,11 @@ graph TD
 
 ## 模块索引
 
-| 路径 | 职责 | 关键类/函数 |
-|------|------|-------------|
-| `java_service_starter/cli.py` | CLI 入口，命令分发 | `main()`, `cmd_start()`, `cmd_stop()`, `cmd_restart()`, `cmd_init()`, `cmd_status()`, `cmd_envs()`, `cmd_history()`, `cmd_clear()`, `cmd_logs()` |
-| `java_service_starter/models.py` | 数据模型定义 | `ServiceConfig`, `JavaConfig`, `JvmConfig`, `MavenConfig`, `ProjectConfig` |
-| `java_service_starter/scanner.py` | Maven 项目自动扫描 | `ProjectScanner`, `ScannedService`, `scan_project()` |
-| `java_service_starter/maven.py` | Maven 编译执行 | `compile_module()`, `auto_compile()` |
-| `java_service_starter/watcher.py` | 源码变更检测 | `needs_compile()` |
-| `java_service_starter/java_runner.py` | Java 进程生命周期管理 | `start_service()`, `build_service()`, `stop_service()`, `is_running()`, `find_pid()`, `get_service_status()`, `clear_service()`, `_copy_dependencies()`, `load_env()`, `build_classpath_dev()` |
-| `java_service_starter/state.py` | 编译/启动状态持久化 | `StateManager`, `ProjectState`, `CompileRecord`, `StartRecord` |
+| 模块 | 路径 | 语言 | 说明 |
+|------|------|------|------|
+| [java_service_starter](java_service_starter/AGENTS.md) | `java_service_starter/` | Python | 核心包：CLI 入口、数据模型、项目扫描、Maven 编译、变更检测、进程管理、状态持久化 |
 
-## 部署
-
-每次改完代码后执行 `make install` 使全局生效（底层 `uv tool install --force --reinstall`）。
-
-## 运行与开发
+## 构建与开发
 
 ### 安装（终端用户）
 
@@ -79,6 +69,10 @@ cd java-service-starter
 uv venv --python 3.14
 uv sync
 ```
+
+### 部署
+
+每次改完代码后执行 `make install` 使全局生效。含本地改动时用 `uv tool install . --force --no-cache`（`--no-cache` 避免使用缓存的 wheel）。
 
 ### CLI 命令
 
@@ -98,9 +92,9 @@ uv sync
 ### 自动编译机制
 
 启动时自动检测编译需求，无需手动指定：
-- `target/classes` 不存在 → 自动 `compile`
-- 源文件有修改但 target 还在 → 自动 `compile`
-- `target/lib` 不存在 → 自动 `install` + `copy-dependencies` 重建依赖 jar
+- `target/classes` 不存在 -> 自动 `compile`
+- 源文件有修改但 target 还在 -> 自动 `compile`
+- `target/lib` 不存在 -> 自动 `install` + `copy-dependencies` 重建依赖 jar
 - 编译使用 `-T 1C` 并行构建加速
 
 ### 配置文件
@@ -140,7 +134,7 @@ uv sync
 - 变更检测有两层策略：优先 `state.is_compile_fresh()`（持久化状态），回退到文件系统时间戳比较
 - classpath 构建优先使用 `target/lib`（jar 拷贝），回退到 `_resolve_maven_classpath`（Maven 本地仓库路径）
 - 多模块项目中 `dependency:build-classpath` 可能失败（reactor 内模块 jar 不在本地仓库），需先 `install`
-- 部署：`make install` 全局生效
+- 部署：`make install` 全局生效；含本地改动时加 `--no-cache`
 
 ## 变更记录 (Changelog)
 
