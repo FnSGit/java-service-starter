@@ -24,15 +24,24 @@ class JavaConfig:
     version: int | None
 
     def resolve_java_bin(self) -> Path:
-        """解析 Java 可执行文件路径."""
+        """解析 Java 可执行文件路径.
+
+        Raises:
+            RuntimeError: 配置了 java.path 但路径不存在。
+                绝不静默回退 PATH 中的 java —— 用错 JDK 会导致难以定位的编译失败。
+        """
         if self.path:
-            p = Path(self.path)
-            if p.is_file() and p.exists():
+            p = Path(self.path).expanduser()
+            if p.is_file():
                 return p
             # 可能是目录，追加 bin/java
             p = p / "bin" / "java"
             if p.exists():
                 return p
+            raise RuntimeError(
+                f"配置的 java.path 不存在: {self.path}\n"
+                f"请修正配置文件中的 java.path，或留空以使用 PATH 中的 java。"
+            )
 
         import shutil
 
@@ -49,9 +58,12 @@ class JavaConfig:
 
         用于 Maven 编译时确保使用正确版本的 Java。
         优先级：java.path 推导 > JAVA_HOME 环境变量 > None
+
+        Raises:
+            RuntimeError: 配置了 java.path 但无法解析为 JDK 目录。
         """
         if self.path:
-            p = Path(self.path).resolve()  # 解析符号链接
+            p = Path(self.path).expanduser().resolve()  # 解析符号链接
             # 如果是 bin/java，取其父目录的父目录
             if p.is_file() and p.name == "java":
                 return p.parent.parent
@@ -61,6 +73,10 @@ class JavaConfig:
             # 如果是 JDK 根目录
             if (p / "bin" / "java").exists():
                 return p
+            raise RuntimeError(
+                f"配置的 java.path 无法解析为 JDK: {self.path}\n"
+                f"请修正配置文件中的 java.path。"
+            )
 
         import os
 
@@ -135,11 +151,19 @@ class MavenConfig:
     skip_tests: bool = True
 
     def resolve_mvn_bin(self) -> Path:
-        """解析 mvn 可执行文件路径."""
+        """解析 mvn 可执行文件路径.
+
+        Raises:
+            RuntimeError: 配置了 maven.path 但路径不存在，不静默回退。
+        """
         if self.path:
-            p = Path(self.path)
-            if p.is_file() and p.exists():
+            p = Path(self.path).expanduser()
+            if p.is_file():
                 return p
+            raise RuntimeError(
+                f"配置的 maven.path 不存在: {self.path}\n"
+                f"请修正配置文件中的 maven.path，或留空以使用 PATH 中的 mvn。"
+            )
 
         import shutil
 

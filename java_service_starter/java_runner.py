@@ -238,8 +238,18 @@ def stop_service(port: int, timeout: int = 30) -> bool:
     return find_pid(port) is None
 
 
-def _resolve_maven_classpath(project_root: Path, module: str, maven: MavenConfig, java_config: JavaConfig | None = None) -> str | None:
-    """通过 mvn dependency:build-classpath 获取 Maven 解析的 classpath 顺序."""
+# 大型多模块项目 dependency:build-classpath 可能需要数分钟；
+# 超时/失败后禁止静默回退字母序 classpath（类冲突风险），必须报错中止
+CLASSPATH_RESOLVE_TIMEOUT = 300
+
+
+def _resolve_maven_classpath(project_root: Path, module: str, maven: MavenConfig, java_config: JavaConfig | None = None) -> str:
+    """通过 mvn dependency:build-classpath 获取 Maven 解析的 classpath 顺序.
+
+    Raises:
+        RuntimeError: 解析超时或执行失败。绝不返回 None ——
+            静默回退字母序会导致 jar 加载顺序错误引发类冲突。
+    """
     from .maven import resolve_mvn_invocation
 
     mvn_bin = maven.resolve_mvn_bin()
@@ -258,15 +268,27 @@ def _resolve_maven_classpath(project_root: Path, module: str, maven: MavenConfig
     env = _build_mvn_env(java_config)
 
     try:
-        result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
-        if result.returncode == 0 and classpath_file.exists():
-            cp = classpath_file.read_text(encoding="utf-8").strip()
-            if cp:
-                return cp
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+        result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True,
+                                timeout=CLASSPATH_RESOLVE_TIMEOUT)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"classpath 顺序解析超时 ({CLASSPATH_RESOLVE_TIMEOUT}s)。\n"
+            "为避免回退字母序 classpath 导致类冲突，已中止。\n"
+            f"请重试；若持续超时，可执行 jss clear {module} 清理后重建。"
+        ) from e
+    except FileNotFoundError as e:
+        raise RuntimeError(f"Maven 可执行文件不存在: {mvn_bin}") from e
 
-    return None
+    if result.returncode == 0 and classpath_file.exists():
+        cp = classpath_file.read_text(encoding="utf-8").strip()
+        if cp:
+            return cp
+
+    raise RuntimeError(
+        f"classpath 顺序解析失败 (dependency:build-classpath exit code: {result.returncode})。\n"
+        "为避免回退字母序 classpath 导致类冲突，已中止。\n"
+        f"请重试；若持续失败，可执行 jss clear {module} 清理后重建。"
+    )
 
 
 def _build_mvn_env(java_config: JavaConfig | None = None) -> dict[str, str]:
@@ -308,6 +330,14 @@ def _copy_dependencies(
     if result.returncode != 0:
         raise RuntimeError(f"安装依赖模块失败 (exit code: {result.returncode})")
 
+    # copy-dependencies 不会清理 outputDirectory：先清空 target/lib，
+    # 避免依赖移除/降级后旧 jar 残留造成类冲突
+    import shutil
+
+    lib_dir = project_root / module / "target" / "lib"
+    if lib_dir.exists():
+        shutil.rmtree(lib_dir)
+
     # 再拷贝依赖 jar（copy-dependencies 不支持 -am，这里复用 -pl 但去掉 -am）
     copy_pl_args = [a for a in pl_args if a != "-am"]
     copy_cmd = [str(mvn_bin), "dependency:copy-dependencies",
@@ -341,6 +371,10 @@ def build_classpath_dev(
 
     Returns:
         classpath 字符串.
+
+    Raises:
+        RuntimeError: 配置了 Maven 但 classpath 顺序解析失败（超时/执行出错），
+            此时绝不静默回退字母序，避免类冲突。
     """
     module_path = project_root / module
     target_classes = module_path / "target" / "classes"
@@ -358,12 +392,10 @@ def build_classpath_dev(
             f"请先执行编译: mvn compile -pl {module} -am"
         )
 
-    # 优先使用 Maven 解析的 classpath 顺序
-    maven_cp = None
     if maven:
+        # Maven 解析的 classpath 顺序（解析失败会抛错，绝不静默回退字母序）
         maven_cp = _resolve_maven_classpath(project_root, module, maven, java_config)
 
-    if maven_cp:
         # Maven classpath 用本地仓库路径，替换为 target/lib 下的同名 jar
         lib_jars: dict[str, Path] = {}
         if target_lib.exists():
@@ -378,7 +410,7 @@ def build_classpath_dev(
                 # Maven 仓库中有但 target/lib 中没有（不应发生），使用原始路径
                 paths.append(maven_jar_path)
     elif target_lib.exists():
-        # 回退：字母排序（可能存在类冲突）
+        # 未配置 Maven 时的回退：字母排序（无顺序信息来源，可能存在类冲突）
         for jar in sorted(target_lib.glob("*.jar")):
             paths.append(str(jar))
 

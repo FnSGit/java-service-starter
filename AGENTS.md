@@ -105,14 +105,20 @@ uv sync
 
 ## 测试策略
 
-当前项目**缺少测试目录和测试用例**。建议优先为以下模块补充测试：
+测试目录 `tests/`，pytest 运行（`make test`）。当前覆盖：
+
+| 模块 | 已覆盖内容 |
+|------|------|
+| `java_runner.py` | `_resolve_maven_classpath` 超时值与超时报错行为、`build_classpath_dev` 禁止静默回退字母序、`_copy_dependencies` 拷贝前清空 target/lib |
+
+建议继续补充：
 
 | 优先级 | 模块 | 建议测试内容 |
 |--------|------|-------------|
 | P0 | `models.py` | `ProjectConfig.from_yaml()` 反序列化、`JvmConfig.build_opts()` 参数构建 |
 | P0 | `state.py` | `StateManager` 序列化/反序列化、`is_compile_fresh()` 判断逻辑 |
 | P1 | `scanner.py` | `_infer_service_name()` 名称推断、`_parse_yaml_port()` 端口解析 |
-| P1 | `java_runner.py` | `_parse_env_file()` 环境变量分类、`build_classpath_dev()` classpath 构建 |
+| P1 | `java_runner.py` | `_parse_env_file()` 环境变量分类 |
 | P2 | `watcher.py` | `needs_compile()` 变更检测逻辑 |
 | P2 | `maven.py` | `MavenConfig.build_compile_args()` 参数构建 |
 
@@ -140,6 +146,7 @@ uv sync
 
 | 时间 | 操作 | 说明 |
 |------|------|------|
+| 2026-10-22 19:41 | 缺陷修复 | 修复 3 个缺陷：① `dependency:build-classpath` 超时 60s→300s 且失败时抛错中止（不再静默回退字母序 classpath，避免类冲突）；② `_copy_dependencies` 拷贝前清空 target/lib（旧 jar 残留导致类冲突）；③ `java.path`/`maven.path` 中的 `~` 展开 + 路径无效时抛错（此前静默回退 PATH 的 java，uccb-epm 项目因此用 JDK 25 编译 JDK 17 项目导致失败，日志中的 dropwizard FATAL 仅为伴随警告）。新增 `tests/` pytest 测试与 `make test` |
 | 2026-07-12 14:57 | 功能增强 | 新增 `build` 子命令（仅编译不启动）；提取 `build_service()` 函数，`start_service` 复用编译逻辑；支持 `--force` 和 `--skip-deps` 选项 |
 | 2026-05-15 09:30 | 功能增强 | 新增 `logs` 命令；自动编译机制（去掉 `-b`）；`status` 替代 `services`；`-T 1C` 并行构建；`_copy_dependencies` 依赖拷贝 |
 | 2026-05-14 21:45 | 初始创建 | 首次生成项目 AI 上下文文档，覆盖全部 7 个源文件 |
